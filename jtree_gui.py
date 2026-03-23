@@ -32,7 +32,9 @@ try:
         QMenu,
         QMessageBox,
         QPushButton,
+        QSizePolicy,
         QSplitter,
+        QStackedWidget,
         QStatusBar,
         QTabWidget,
         QTextEdit,
@@ -63,7 +65,9 @@ except ImportError:
         QMenu,
         QMessageBox,
         QPushButton,
+        QSizePolicy,
         QSplitter,
+        QStackedWidget,
         QStatusBar,
         QTabWidget,
         QTextEdit,
@@ -88,6 +92,9 @@ if QT6:
     ASPECT_KEEP = Qt.AspectRatioMode.KeepAspectRatio
     LEFT_MOUSE_BUTTON = Qt.MouseButton.LeftButton
     NO_MOUSE_BUTTON = Qt.MouseButton.NoButton
+    ALIGN_CENTER = Qt.AlignmentFlag.AlignCenter
+    SIZE_POLICY_EXPANDING = QSizePolicy.Policy.Expanding
+    SIZE_POLICY_FIXED = QSizePolicy.Policy.Fixed
 else:
     ORIENTATION_HORIZONTAL = Qt.Horizontal
     ORIENTATION_VERTICAL = Qt.Vertical
@@ -101,6 +108,9 @@ else:
     ASPECT_KEEP = Qt.KeepAspectRatio
     LEFT_MOUSE_BUTTON = Qt.LeftButton
     NO_MOUSE_BUTTON = Qt.NoButton
+    ALIGN_CENTER = Qt.AlignCenter
+    SIZE_POLICY_EXPANDING = QSizePolicy.Expanding
+    SIZE_POLICY_FIXED = QSizePolicy.Fixed
 
 PATH_ROLE = USER_ROLE
 NODE_ROLE = USER_ROLE + 1
@@ -180,6 +190,10 @@ class TreeExplorerWindow(QMainWindow):
         self.map_rect_by_path: Dict[str, object] = {}
         self.map_alias_to_path: Dict[str, str] = {}
         self._map_root_key: str = "root"
+        self.search_match_indices: List[int] = []
+        self.search_match_cursor = -1
+        self.current_theme = "dark"
+        self.search_match_brush = QBrush(QColor("#3f5e8f"))
 
         self.setWindowTitle("Structured Tree Explorer")
         self.resize(1480, 900)
@@ -212,19 +226,41 @@ class TreeExplorerWindow(QMainWindow):
         self.map_view.setTransformationAnchor(GRAPH_ANCHOR_MOUSE)
         self.map_view.setResizeAnchor(GRAPH_ANCHOR_CENTER)
 
+        self.structure_tree_text = QTextEdit()
+        self.structure_tree_text.setReadOnly(True)
+        if QT6:
+            self.structure_tree_text.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        else:
+            self.structure_tree_text.setLineWrapMode(QTextEdit.NoWrap)
+        self.structure_tree_text.setPlaceholderText("Tree text view appears here.")
+
         self.structure_tabs = QTabWidget()
         self.structure_tabs.addTab(self.tree_view, "Outline")
+        self.structure_tabs.addTab(self.structure_tree_text, "Tree View")
         self.structure_tabs.addTab(self.map_view, "Map")
 
+        self.structure_stack = QStackedWidget()
+        self.structure_stack.addWidget(self._build_empty_state_widget())
+        self.structure_stack.addWidget(self.structure_tabs)
+        self.structure_stack.setCurrentIndex(0)
+
         left_panel = self._wrap_panel("Files", self.file_list)
-        center_panel = self._wrap_panel("Structure", self.structure_tabs)
+        center_panel = self._wrap_panel("Structure", self.structure_stack)
         right_panel = self._wrap_panel("Inspector", self._build_inspector_widget())
 
+        left_panel.setMinimumWidth(220)
+        center_panel.setMinimumWidth(420)
+        right_panel.setMinimumWidth(260)
+
         splitter = QSplitter(ORIENTATION_HORIZONTAL)
+        splitter.setChildrenCollapsible(False)
         splitter.addWidget(left_panel)
         splitter.addWidget(center_panel)
         splitter.addWidget(right_panel)
-        splitter.setSizes([300, 830, 350])
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 6)
+        splitter.setStretchFactor(2, 3)
+        splitter.setSizes([260, 780, 360])
 
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -236,6 +272,39 @@ class TreeExplorerWindow(QMainWindow):
         status = QStatusBar()
         status.showMessage("Drop JSON/XML/YAML/TOML/INI files to start")
         self.setStatusBar(status)
+
+    def _build_empty_state_widget(self) -> QWidget:
+        card = QWidget()
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(12)
+
+        title = QLabel("Load a structured file")
+        title.setAlignment(ALIGN_CENTER)
+        title.setObjectName("EmptyStateTitle")
+
+        subtitle = QLabel(
+            "Drop files here or use Open to explore JSON, XML, YAML, TOML, and INI trees."
+        )
+        subtitle.setWordWrap(True)
+        subtitle.setAlignment(ALIGN_CENTER)
+        subtitle.setObjectName("EmptyStateSubtitle")
+
+        open_btn = QPushButton("Open Files")
+        open_btn.clicked.connect(self.open_files_dialog)
+        open_btn.setFixedWidth(150)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        btn_row.addWidget(open_btn)
+        btn_row.addStretch(1)
+
+        layout.addStretch(1)
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addLayout(btn_row)
+        layout.addStretch(2)
+        return card
 
     def _build_inspector_widget(self) -> QWidget:
         self.details = QTextEdit()
@@ -251,7 +320,7 @@ class TreeExplorerWindow(QMainWindow):
         details_layout.setContentsMargins(0, 0, 0, 0)
         details_layout.setSpacing(4)
         details_title = QLabel("Node Details")
-        details_title.setStyleSheet("font: 700 10pt 'Segoe UI'; color: #ffffff;")
+        details_title.setObjectName("SectionTitle")
         details_layout.addWidget(details_title)
         details_layout.addWidget(self.details)
 
@@ -260,12 +329,12 @@ class TreeExplorerWindow(QMainWindow):
         preview_layout.setContentsMargins(0, 0, 0, 0)
         preview_layout.setSpacing(4)
         preview_title = QLabel("Color-Coded Tree Preview")
-        preview_title.setStyleSheet("font: 700 10pt 'Segoe UI'; color: #ffffff;")
+        preview_title.setObjectName("SectionTitle")
         preview_mode_row = QHBoxLayout()
         preview_mode_row.setContentsMargins(0, 0, 0, 0)
         preview_mode_row.setSpacing(8)
         preview_mode_label = QLabel("Mode")
-        preview_mode_label.setStyleSheet("font: 600 9.5pt 'Segoe UI'; color: #ffffff;")
+        preview_mode_label.setObjectName("SectionSubtle")
         self.preview_mode_combo = QComboBox()
         self.preview_mode_combo.addItem("Selected Subtree")
         self.preview_mode_combo.addItem("Full File Tree")
@@ -301,6 +370,19 @@ class TreeExplorerWindow(QMainWindow):
         clear_action.triggered.connect(self.clear_session)
         toolbar.addAction(clear_action)
 
+        toggle_theme_action = QAction("Toggle Theme", self)
+        toggle_theme_action.setShortcut("Ctrl+T")
+        toggle_theme_action.triggered.connect(self._toggle_theme)
+        toolbar.addAction(toggle_theme_action)
+
+        toolbar.addWidget(QLabel("Theme"))
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem("Dark")
+        self.theme_combo.addItem("Light")
+        self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
+        self.theme_combo.setMaximumWidth(110)
+        toolbar.addWidget(self.theme_combo)
+
         expand_action = QAction("Expand All", self)
         expand_action.triggered.connect(self.tree_view.expandAll)
         toolbar.addAction(expand_action)
@@ -335,9 +417,16 @@ class TreeExplorerWindow(QMainWindow):
 
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("Search keys or values...")
-        self.search_box.setMaximumWidth(220)
+        self.search_box.setMinimumWidth(180)
+        self.search_box.setMaximumWidth(420)
+        self.search_box.setSizePolicy(SIZE_POLICY_EXPANDING, SIZE_POLICY_FIXED)
+        self.search_box.textChanged.connect(self._on_search_text_changed)
         self.search_box.returnPressed.connect(self.search_next)
         toolbar.addWidget(self.search_box)
+
+        prev_btn = QPushButton("Prev")
+        prev_btn.clicked.connect(self.search_prev)
+        toolbar.addWidget(prev_btn)
 
         find_btn = QPushButton("Next")
         find_btn.clicked.connect(self.search_next)
@@ -348,7 +437,9 @@ class TreeExplorerWindow(QMainWindow):
 
         self.path_box = QLineEdit()
         self.path_box.setPlaceholderText("Example: users.0.name or LinearLayout.child[1]")
-        self.path_box.setMaximumWidth(280)
+        self.path_box.setMinimumWidth(220)
+        self.path_box.setMaximumWidth(520)
+        self.path_box.setSizePolicy(SIZE_POLICY_EXPANDING, SIZE_POLICY_FIXED)
         self.path_box.returnPressed.connect(self.go_to_path)
         toolbar.addWidget(self.path_box)
 
@@ -360,137 +451,168 @@ class TreeExplorerWindow(QMainWindow):
         stats_action.triggered.connect(self.show_tree_stats)
         toolbar.addAction(stats_action)
 
-    def _apply_theme(self) -> None:
-        self.setStyleSheet(
-            """
-            QMainWindow {
-                background: #1a1a1a;
-            }
+    def _apply_theme(self, theme_name: Optional[str] = None) -> None:
+        if theme_name is not None:
+            self.current_theme = theme_name
+
+        if self.current_theme == "light":
+            self.search_match_brush = QBrush(QColor("#ffefad"))
+            stylesheet = """
+            QMainWindow { background: #f4f6f8; }
             QToolBar {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #202020, stop:1 #2b2b2b);
+                    stop:0 #ffffff, stop:1 #eef2f6);
                 border: none;
                 spacing: 8px;
                 padding: 6px;
             }
-            QToolBar QLabel {
-                color: #ffffff;
-                font: 600 10pt "Segoe UI";
-                margin-left: 8px;
-            }
+            QToolBar QLabel { color: #2f3944; font: 600 10pt "Segoe UI"; margin-left: 8px; }
             QToolBar QLineEdit {
-                background: #2a2a2a;
-                color: #ffffff;
-                border: 1px solid #4a4a4a;
-                border-radius: 5px;
-                padding: 5px 8px;
-                font: 10pt "Segoe UI";
+                background: #ffffff; color: #1f2a36; border: 1px solid #c5d0da;
+                border-radius: 5px; padding: 5px 8px; font: 10pt "Segoe UI";
+                selection-background-color: #dceafe;
+            }
+            QToolBar QPushButton {
+                background: #ffffff; color: #1f2a36; border: 1px solid #b9c5d1;
+                border-radius: 5px; padding: 4px 10px; font: 10pt "Segoe UI";
+            }
+            QToolBar QPushButton:hover { background: #f1f5fa; }
+            QComboBox {
+                background: #ffffff; color: #1f2a36; border: 1px solid #c5d0da;
+                border-radius: 5px; padding: 4px 8px; min-height: 24px;
+            }
+            QComboBox::drop-down { border: none; width: 20px; }
+            QComboBox QAbstractItemView {
+                background: #ffffff; color: #1f2a36; selection-background-color: #dceafe;
+                border: 1px solid #c5d0da;
+            }
+            QToolBar QToolButton {
+                color: #2f3944; background: transparent; border: 1px solid transparent;
+                border-radius: 4px; padding: 5px 10px; font: 10pt "Segoe UI";
+            }
+            QToolBar QToolButton:hover { border-color: #b9c5d1; background: rgba(27, 61, 107, 0.08); }
+            QTreeWidget, QListWidget, QTextEdit {
+                background: #ffffff; color: #1f2a36; border: 1px solid #ccd6e0;
+                border-radius: 6px; font: 10pt "Segoe UI";
+                selection-background-color: #dceafe; selection-color: #10243e;
+            }
+            QGraphicsView {
+                background: #f7f9fb; color: #1f2a36; border: 1px solid #ccd6e0; border-radius: 6px;
+            }
+            QTabWidget::pane {
+                border: 1px solid #ccd6e0; border-radius: 6px; background: #ffffff; top: -1px;
+            }
+            QTabBar::tab {
+                background: #eef2f6; color: #4b5563; border: 1px solid #ccd6e0; border-bottom: none;
+                min-width: 84px; padding: 6px 12px; margin-right: 2px; border-top-left-radius: 5px; border-top-right-radius: 5px;
+            }
+            QTabBar::tab:selected { background: #ffffff; color: #1f2a36; }
+            QTabBar::tab:hover { background: #f8fafc; }
+            QTreeWidget::item { height: 24px; }
+            QTreeWidget::item:selected, QListWidget::item:selected { background: #dceafe; color: #10243e; }
+            QHeaderView::section {
+                background: #eef2f6; color: #1f2a36; border: none; border-right: 1px solid #ccd6e0;
+                border-bottom: 1px solid #ccd6e0; padding: 5px; font: 600 9.5pt "Segoe UI";
+            }
+            QStatusBar {
+                background: #edf2f7; border-top: 1px solid #ccd6e0; color: #2f3944; font: 9.5pt "Segoe UI";
+            }
+            QLabel#PanelTitle, QLabel#SectionTitle {
+                font: 700 11pt "Segoe UI"; color: #1f2a36; padding-left: 2px;
+            }
+            QLabel#SectionSubtle, QLabel#EmptyStateSubtitle { font: 10pt "Segoe UI"; color: #5b6672; }
+            QLabel#EmptyStateTitle { font: 700 15pt "Segoe UI"; color: #1f2a36; }
+            """
+        else:
+            self.search_match_brush = QBrush(QColor("#3f5e8f"))
+            stylesheet = """
+            QMainWindow { background: #1a1a1a; }
+            QToolBar {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #202020, stop:1 #2b2b2b);
+                border: none; spacing: 8px; padding: 6px;
+            }
+            QToolBar QLabel { color: #ffffff; font: 600 10pt "Segoe UI"; margin-left: 8px; }
+            QToolBar QLineEdit {
+                background: #2a2a2a; color: #ffffff; border: 1px solid #4a4a4a;
+                border-radius: 5px; padding: 5px 8px; font: 10pt "Segoe UI";
                 selection-background-color: #5e5e5e;
             }
             QToolBar QPushButton {
-                background: #303030;
-                color: #ffffff;
-                border: 1px solid #555555;
-                border-radius: 5px;
-                padding: 4px 10px;
-                font: 10pt "Segoe UI";
+                background: #303030; color: #ffffff; border: 1px solid #555555;
+                border-radius: 5px; padding: 4px 10px; font: 10pt "Segoe UI";
             }
-            QToolBar QPushButton:hover {
-                background: #3d3d3d;
-            }
+            QToolBar QPushButton:hover { background: #3d3d3d; }
             QComboBox {
-                background: #2a2a2a;
-                color: #ffffff;
-                border: 1px solid #4a4a4a;
-                border-radius: 5px;
-                padding: 4px 8px;
-                min-height: 24px;
+                background: #2a2a2a; color: #ffffff; border: 1px solid #4a4a4a;
+                border-radius: 5px; padding: 4px 8px; min-height: 24px;
             }
-            QComboBox::drop-down {
-                border: none;
-                width: 20px;
-            }
+            QComboBox::drop-down { border: none; width: 20px; }
             QComboBox QAbstractItemView {
-                background: #2a2a2a;
-                color: #ffffff;
-                selection-background-color: #5a5a5a;
+                background: #2a2a2a; color: #ffffff; selection-background-color: #5a5a5a;
                 border: 1px solid #4a4a4a;
             }
             QToolBar QToolButton {
-                color: #ffffff;
-                background: transparent;
-                border: 1px solid transparent;
-                border-radius: 4px;
-                padding: 5px 10px;
-                font: 10pt "Segoe UI";
+                color: #ffffff; background: transparent; border: 1px solid transparent;
+                border-radius: 4px; padding: 5px 10px; font: 10pt "Segoe UI";
             }
-            QToolBar QToolButton:hover {
-                border-color: #666666;
-                background: rgba(255, 255, 255, 0.10);
-            }
+            QToolBar QToolButton:hover { border-color: #666666; background: rgba(255, 255, 255, 0.10); }
             QTreeWidget, QListWidget, QTextEdit {
-                background: #242424;
-                color: #ffffff;
-                border: 1px solid #4a4a4a;
-                border-radius: 6px;
-                font: 10pt "Segoe UI";
-                selection-background-color: #505050;
-                selection-color: #ffffff;
+                background: #242424; color: #ffffff; border: 1px solid #4a4a4a;
+                border-radius: 6px; font: 10pt "Segoe UI";
+                selection-background-color: #505050; selection-color: #ffffff;
             }
             QGraphicsView {
-                background: #1f1f1f;
-                color: #ffffff;
-                border: 1px solid #4a4a4a;
-                border-radius: 6px;
+                background: #1f1f1f; color: #ffffff; border: 1px solid #4a4a4a; border-radius: 6px;
             }
             QTabWidget::pane {
-                border: 1px solid #4a4a4a;
-                border-radius: 6px;
-                background: #242424;
-                top: -1px;
+                border: 1px solid #4a4a4a; border-radius: 6px; background: #242424; top: -1px;
             }
             QTabBar::tab {
-                background: #2b2b2b;
-                color: #d6d6d6;
-                border: 1px solid #4a4a4a;
-                border-bottom: none;
-                min-width: 84px;
-                padding: 6px 12px;
-                margin-right: 2px;
-                border-top-left-radius: 5px;
-                border-top-right-radius: 5px;
+                background: #2b2b2b; color: #d6d6d6; border: 1px solid #4a4a4a; border-bottom: none;
+                min-width: 84px; padding: 6px 12px; margin-right: 2px; border-top-left-radius: 5px; border-top-right-radius: 5px;
             }
-            QTabBar::tab:selected {
-                background: #353535;
-                color: #ffffff;
-            }
-            QTabBar::tab:hover {
-                background: #3a3a3a;
-            }
-            QTreeWidget::item {
-                height: 24px;
-            }
-            QTreeWidget::item:selected, QListWidget::item:selected {
-                background: #5a5a5a;
-                color: #ffffff;
-            }
+            QTabBar::tab:selected { background: #353535; color: #ffffff; }
+            QTabBar::tab:hover { background: #3a3a3a; }
+            QTreeWidget::item { height: 24px; }
+            QTreeWidget::item:selected, QListWidget::item:selected { background: #5a5a5a; color: #ffffff; }
             QHeaderView::section {
-                background: #303030;
-                color: #ffffff;
-                border: none;
-                border-right: 1px solid #4a4a4a;
-                border-bottom: 1px solid #4a4a4a;
-                padding: 5px;
-                font: 600 9.5pt "Segoe UI";
+                background: #303030; color: #ffffff; border: none; border-right: 1px solid #4a4a4a;
+                border-bottom: 1px solid #4a4a4a; padding: 5px; font: 600 9.5pt "Segoe UI";
             }
             QStatusBar {
-                background: #222222;
-                border-top: 1px solid #4a4a4a;
-                color: #ffffff;
-                font: 9.5pt "Segoe UI";
+                background: #222222; border-top: 1px solid #4a4a4a; color: #ffffff; font: 9.5pt "Segoe UI";
             }
+            QLabel#PanelTitle, QLabel#SectionTitle {
+                font: 700 11pt "Segoe UI"; color: #ffffff; padding-left: 2px;
+            }
+            QLabel#SectionSubtle, QLabel#EmptyStateSubtitle { font: 10pt "Segoe UI"; color: #c7c7c7; }
+            QLabel#EmptyStateTitle { font: 700 15pt "Segoe UI"; color: #f0f0f0; }
             """
-        )
+
+        self.setStyleSheet(stylesheet)
+
+        if hasattr(self, "theme_combo"):
+            self.theme_combo.blockSignals(True)
+            self.theme_combo.setCurrentIndex(1 if self.current_theme == "light" else 0)
+            self.theme_combo.blockSignals(False)
+
+    def _on_theme_changed(self, _index: int) -> None:
+        theme = "light" if self.theme_combo.currentText().strip().lower().startswith("light") else "dark"
+        self._apply_theme(theme)
+        if self.current_file and self.current_file in self.roots_by_file:
+            root = self.roots_by_file[self.current_file]
+            self._refresh_structure_tree_text(root)
+            self._refresh_tree_preview()
+            self._render_graph_map(root)
+            if self.selected_path:
+                self._highlight_map_path(self.selected_path)
+        self._apply_search_highlights(self._iter_tree_items())
+
+    def _toggle_theme(self) -> None:
+        if not hasattr(self, "theme_combo"):
+            return
+        self.theme_combo.setCurrentIndex(1 if self.current_theme == "dark" else 0)
 
     def _wrap_panel(self, title: str, widget: QWidget) -> QWidget:
         panel = QWidget()
@@ -499,9 +621,7 @@ class TreeExplorerWindow(QMainWindow):
         layout.setSpacing(6)
 
         label = QLabel(title)
-        label.setStyleSheet(
-            "font: 700 11pt 'Segoe UI'; color: #ffffff; padding-left: 2px;"
-        )
+        label.setObjectName("PanelTitle")
 
         layout.addWidget(label)
         layout.addWidget(widget)
@@ -529,9 +649,40 @@ class TreeExplorerWindow(QMainWindow):
         self.map_alias_to_path.clear()
         self.details.clear()
         self.tree_preview.clear()
+        self.structure_tree_text.clear()
         self.selected_node = None
         self.selected_path = "."
+        self._reset_search_state()
+        self.structure_stack.setCurrentIndex(0)
         self.statusBar().showMessage("Session cleared")
+
+    def _reset_search_state(self) -> None:
+        self._clear_search_highlights(self._iter_tree_items())
+        self.last_query = ""
+        self.last_match_index = -1
+        self.search_match_indices.clear()
+        self.search_match_cursor = -1
+
+    def _clear_search_highlights(self, items: List[QTreeWidgetItem]) -> None:
+        empty_brush = QBrush()
+        for item in items:
+            for col in range(3):
+                item.setBackground(col, empty_brush)
+
+    def _apply_search_highlights(self, items: List[QTreeWidgetItem]) -> None:
+        self._clear_search_highlights(items)
+        for idx in self.search_match_indices:
+            if idx >= len(items):
+                continue
+            item = items[idx]
+            for col in range(3):
+                item.setBackground(col, self.search_match_brush)
+
+    def _on_search_text_changed(self, text: str) -> None:
+        if text.strip():
+            return
+        self._reset_search_state()
+        self.statusBar().showMessage("Search cleared")
 
     def load_files(self, paths: List[str]) -> None:
         loaded = 0
@@ -671,11 +822,27 @@ class TreeExplorerWindow(QMainWindow):
         self._register_path_aliases(root_path, root_item, root.key)
 
         self._populate_children(root_item, root, root_path, root.key)
+        self._refresh_structure_tree_text(root)
         self._render_graph_map(root)
 
         self.tree_view.expandToDepth(1)
         self.tree_view.resizeColumnToContents(0)
         self.tree_view.setCurrentItem(root_item)
+        self._reset_search_state()
+        self.structure_stack.setCurrentIndex(1)
+
+    def _refresh_structure_tree_text(self, root: TreeNode) -> None:
+        lines: List[str] = []
+        self._collect_preview_lines(root, lines)
+        palette = self._preview_palette()
+        html = (
+            f"<div style='color:{palette['title']}; margin-bottom:6px;'>Full Tree</div>"
+            "<pre style='margin:0; font-family: Consolas, \"Cascadia Mono\", monospace; "
+            f"font-size:10pt; line-height:1.35; color:{palette['tree_text']};'>"
+            + "\n".join(lines)
+            + "</pre>"
+        )
+        self.structure_tree_text.setHtml(html)
 
     def _populate_children(
         self,
@@ -761,39 +928,71 @@ class TreeExplorerWindow(QMainWindow):
         else:
             self.tree_preview.clear()
 
+    def _preview_palette(self) -> Dict[str, str]:
+        if self.current_theme == "light":
+            return {
+                "title": "#344457",
+                "tree_text": "#1f2a36",
+                "line": "#7b8795",
+                "key": "#235a9f",
+                "meta": "#6b7280",
+                "object": "#a05e00",
+                "array": "#a05e00",
+                "string": "#1c7f46",
+                "number": "#005f9e",
+                "boolean": "#7d49a3",
+                "null": "#c0392b",
+                "unknown": "#4b5563",
+            }
+        return {
+            "title": "#cfcfcf",
+            "tree_text": "#ffffff",
+            "line": "#888888",
+            "key": "#9ec4ff",
+            "meta": "#9f9f9f",
+            "object": "#f4d35e",
+            "array": "#f4d35e",
+            "string": "#97d9a8",
+            "number": "#89d7ff",
+            "boolean": "#d9b4ff",
+            "null": "#ff9a9a",
+            "unknown": "#e6e6e6",
+        }
+
     def _tree_value_html(self, node: TreeNode) -> str:
+        palette = self._preview_palette()
         if node.type_name == "object":
             return (
-                "<span style='color:#f4d35e'>{}</span> "
-                "<span style='color:#9f9f9f'>(object)</span>"
+                f"<span style='color:{palette['object']}'>{{}}</span> "
+                f"<span style='color:{palette['meta']}'>(object)</span>"
             )
         if node.type_name == "array":
             return (
-                "<span style='color:#f4d35e'>[]</span> "
-                "<span style='color:#9f9f9f'>(array)</span>"
+                f"<span style='color:{palette['array']}'>[]</span> "
+                f"<span style='color:{palette['meta']}'>(array)</span>"
             )
         if node.type_name == "element":
             if node.value is None:
-                return "<span style='color:#9f9f9f'>(element)</span>"
+                return f"<span style='color:{palette['meta']}'>(element)</span>"
             text = html_escape(str(node.value))
             return (
-                "<span style='color:#9f9f9f'>(element)</span>: "
-                f"<span style='color:#97d9a8'>\"{text}\"</span>"
+                f"<span style='color:{palette['meta']}'>(element)</span>: "
+                f"<span style='color:{palette['string']}'>\"{text}\"</span>"
             )
 
         if node.value is None:
-            return f"<span style='color:#d0d0d0'>&lt;{html_escape(node.type_name)}&gt;</span>"
+            return f"<span style='color:{palette['unknown']}'>&lt;{html_escape(node.type_name)}&gt;</span>"
 
         value = html_escape(str(node.value))
         if node.type_name == "string":
-            return f": <span style='color:#97d9a8'>\"{value}\"</span>"
+            return f": <span style='color:{palette['string']}'>\"{value}\"</span>"
         if node.type_name == "number":
-            return f": <span style='color:#89d7ff'>{value}</span>"
+            return f": <span style='color:{palette['number']}'>{value}</span>"
         if node.type_name == "boolean":
-            return f": <span style='color:#d9b4ff'>{value}</span>"
+            return f": <span style='color:{palette['boolean']}'>{value}</span>"
         if node.type_name == "null":
-            return f": <span style='color:#ff9a9a'>{value}</span>"
-        return f": <span style='color:#e6e6e6'>{value}</span>"
+            return f": <span style='color:{palette['null']}'>{value}</span>"
+        return f": <span style='color:{palette['unknown']}'>{value}</span>"
 
     def _collect_preview_lines(
         self,
@@ -803,9 +1002,10 @@ class TreeExplorerWindow(QMainWindow):
         is_last: bool = True,
         is_root: bool = True,
     ) -> None:
+        palette = self._preview_palette()
         connector = "" if is_root else ("└── " if is_last else "├── ")
-        line_prefix = f"<span style='color:#888888'>{html_escape(prefix + connector)}</span>"
-        key_html = f"<span style='color:#9ec4ff'>{html_escape(node.key)}</span>"
+        line_prefix = f"<span style='color:{palette['line']}'>{html_escape(prefix + connector)}</span>"
+        key_html = f"<span style='color:{palette['key']}'>{html_escape(node.key)}</span>"
         value_html = self._tree_value_html(node)
         lines.append(f"{line_prefix}{key_html}{value_html}")
 
@@ -825,11 +1025,12 @@ class TreeExplorerWindow(QMainWindow):
     def _render_tree_preview(self, node: TreeNode, path: str, title_prefix: str = "Subtree") -> None:
         lines: List[str] = []
         self._collect_preview_lines(node, lines)
+        palette = self._preview_palette()
         title = html_escape(path if path else ".")
         html = (
-            f"<div style='color:#cfcfcf; margin-bottom:6px;'>{html_escape(title_prefix)}: <b>{title}</b></div>"
+            f"<div style='color:{palette['title']}; margin-bottom:6px;'>{html_escape(title_prefix)}: <b>{title}</b></div>"
             "<pre style='margin:0; font-family: Consolas, \"Cascadia Mono\", monospace; "
-            "font-size:10pt; line-height:1.35; color:#ffffff;'>"
+            f"font-size:10pt; line-height:1.35; color:{palette['tree_text']};'>"
             + "\n".join(lines)
             + "</pre>"
         )
@@ -956,6 +1157,12 @@ class TreeExplorerWindow(QMainWindow):
         # Keep card sizes stable and readable.
         return max(58.0, 18.0 * self._map_line_count(node) + 18.0)
 
+    def _max_map_line_count(self, node: TreeNode) -> int:
+        max_count = self._map_line_count(node)
+        for child in node.children:
+            max_count = max(max_count, self._max_map_line_count(child))
+        return max_count
+
     def _compute_graph_layout(
         self,
         node: TreeNode,
@@ -1016,6 +1223,8 @@ class TreeExplorerWindow(QMainWindow):
 
         positions: Dict[str, tuple[int, float, TreeNode, float]] = {}
         edges: List[tuple[str, str]] = []
+        max_lines = self._max_map_line_count(root)
+        vertical_gap = 24.0 + min(28.0, max(0, max_lines - 3) * 3.0)
         self._compute_graph_layout(
             root,
             root.key,
@@ -1023,11 +1232,11 @@ class TreeExplorerWindow(QMainWindow):
             positions,
             edges,
             [40.0],
-            vertical_gap=34.0,
+            vertical_gap=vertical_gap,
         )
 
-        box_width = 320.0
-        col_gap = 380.0
+        box_width = 280.0 + min(120.0, max(0, max_lines - 4) * 12.0)
+        col_gap = box_width + 70.0
         margin = 40.0
         geometry: Dict[str, tuple[float, float, float, float]] = {}
 
@@ -1127,7 +1336,20 @@ class TreeExplorerWindow(QMainWindow):
 
         return items
 
-    def search_next(self) -> None:
+    def _build_search_matches(self, items: List[QTreeWidgetItem], query: str) -> None:
+        query_lc = query.lower()
+        self.search_match_indices = []
+        for idx, item in enumerate(items):
+            haystack = f"{item.text(0)} {item.text(1)} {item.text(2)}".lower()
+            if query_lc in haystack:
+                self.search_match_indices.append(idx)
+        self.search_match_cursor = -1
+        self._apply_search_highlights(items)
+
+    def _navigate_search(self, step: int) -> None:
+        if step == 0:
+            return
+
         query = self.search_box.text().strip()
         if not query:
             self.statusBar().showMessage("Enter a search string")
@@ -1139,32 +1361,37 @@ class TreeExplorerWindow(QMainWindow):
 
         if query != self.last_query:
             self.last_query = query
-            self.last_match_index = -1
+            self._build_search_matches(items, query)
 
-        start = self.last_match_index + 1
-        query_lc = query.lower()
+        if not self.search_match_indices:
+            self.statusBar().showMessage(f"No matches for '{query}'")
+            return
 
-        for idx in range(start, len(items)):
-            item = items[idx]
-            haystack = f"{item.text(0)} {item.text(1)} {item.text(2)}".lower()
-            if query_lc in haystack:
-                self.last_match_index = idx
-                self.tree_view.setCurrentItem(item)
-                self.tree_view.scrollToItem(item)
-                self.statusBar().showMessage(f"Search hit {idx + 1}/{len(items)}")
-                return
+        previous_cursor = self.search_match_cursor
+        next_cursor = self.search_match_cursor + step
+        self.search_match_cursor = next_cursor % len(self.search_match_indices)
+        item_index = self.search_match_indices[self.search_match_cursor]
+        self.last_match_index = item_index
+        item = items[item_index]
 
-        for idx in range(0, start):
-            item = items[idx]
-            haystack = f"{item.text(0)} {item.text(1)} {item.text(2)}".lower()
-            if query_lc in haystack:
-                self.last_match_index = idx
-                self.tree_view.setCurrentItem(item)
-                self.tree_view.scrollToItem(item)
-                self.statusBar().showMessage("Search wrapped to start")
-                return
+        self.tree_view.setCurrentItem(item)
+        self.tree_view.scrollToItem(item)
 
-        self.statusBar().showMessage("No matches found")
+        wrapped = previous_cursor >= 0 and ((step > 0 and self.search_match_cursor == 0) or (step < 0 and self.search_match_cursor == len(self.search_match_indices) - 1))
+        if wrapped:
+            self.statusBar().showMessage(
+                f"Match {self.search_match_cursor + 1}/{len(self.search_match_indices)} (wrapped)"
+            )
+        else:
+            self.statusBar().showMessage(
+                f"Match {self.search_match_cursor + 1}/{len(self.search_match_indices)}"
+            )
+
+    def search_next(self) -> None:
+        self._navigate_search(step=1)
+
+    def search_prev(self) -> None:
+        self._navigate_search(step=-1)
 
     def go_to_path(self) -> None:
         path = self.path_box.text().strip()

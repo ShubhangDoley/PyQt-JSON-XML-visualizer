@@ -1,0 +1,29 @@
+{
+  "testName": "Sample Test",
+  "version": 1,
+  "description": "This is a sample JSON file for testing purposes",
+  "isActive": true,
+  "users": [
+    {
+      "id": 1,
+      "name": "Alice",
+      "email": "alice@example.com",
+      "roles": ["admin", "editor"]
+    },
+    {
+      "id": 2,
+      "name": "Bob",
+      "email": "bob@example.com",
+      "roles": ["viewer"]
+    }
+  ],
+  "settings": {
+    "theme": "dark",
+    "notifications": true,
+    "language": "en"
+  },
+  "metadata": {
+    "createdAt": "2026-03-23T00:00:00Z",
+    "tags": ["test", "sample", "json"]
+  }
+}
