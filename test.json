@@ -1,0 +1,19 @@
+{
+    "project1":{
+        "project": "JSON Tree Viewer",
+        "version": 1.0,
+        "features": [
+            "Parsing",
+            "Visualization",
+            "Search"
+        ],
+        "author": {
+            "name": "Antigravity",
+            "role": "AI Assistant"
+        },
+        "settings": {
+            "theme": "dark",
+            "retry_count": 3
+        }
+    }
+}

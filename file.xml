@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<SmartDustbinSystem>
+
+    <Input>
+        <Camera>
+            <Type>ESP32-CAM</Type>
+            <Position>Top Mounted</Position>
+            <Resolution>640x480</Resolution>
+        </Camera>
+    </Input>
+
+    <Processing>
+        <Model>
+            <Name>YOLOv11</Name>
+            <ExecutionDevice>Laptop/PC</ExecutionDevice>
+            <Framework>PyTorch</Framework>
+        </Model>
+
+        <Communication>
+            <Protocol>WiFi</Protocol>
+            <Direction>ESP32 → Laptop → ESP32</Direction>
+        </Communication>
+    </Processing>
+
+    <Decision>
+        <Classes>
+            <Class name="Wet Waste" action="Right Bin"/>
+            <Class name="Dry Waste" action="Left Bin"/>
+            <Class name="Metal/Plastic" action="Center Bin"/>
+        </Classes>
+    </Decision>
+
+    <Output>
+        <Actuator>
+            <Type>Servo Motor</Type>
+            <Function>Push Object to Bin</Function>
+            <Angles>
+                <Left>30</Left>
+                <Center>90</Center>
+                <Right>150</Right>
+            </Angles>
+        </Actuator>
+
+        <Indicators>
+            <LED status="Wet">Green</LED>
+            <LED status="Dry">Blue</LED>
+            <LED status="Other">Red</LED>
+        </Indicators>
+    </Output>
+
+    <Structure>
+        <Platform size="15x15cm"/>
+        <CameraHeight>20cm</CameraHeight>
+        <Bins count="3"/>
+    </Structure>
+
+</SmartDustbinSystem>
