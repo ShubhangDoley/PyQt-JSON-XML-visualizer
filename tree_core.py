@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 import configparser
 import json
 import os
@@ -403,3 +404,196 @@ class TreeOperations:
             count += child_count
             max_child_depth = max(max_child_depth, child_depth)
         return count, depth + max_child_depth
+
+
+class GraphModel:
+    """Directed graph using adjacency-list representation."""
+
+    def __init__(self) -> None:
+        self.adj: dict[str, set[str]] = {}
+        self.node_meta: dict[str, dict[str, str]] = {}
+        self.alias_to_node: dict[str, str] = {}
+
+    def add_node(self, node_id: str, **meta: str) -> None:
+        if node_id not in self.adj:
+            self.adj[node_id] = set()
+        if node_id not in self.node_meta:
+            self.node_meta[node_id] = {}
+        for key, val in meta.items():
+            self.node_meta[node_id][key] = val
+
+    def add_edge(self, src: str, dst: str) -> None:
+        self.add_node(src)
+        self.add_node(dst)
+        self.adj[src].add(dst)
+
+    def add_alias(self, alias: str, node_id: str) -> None:
+        if alias:
+            self.alias_to_node[alias] = node_id
+
+    def resolve(self, name: str) -> Optional[str]:
+        if name in self.adj:
+            return name
+        return self.alias_to_node.get(name)
+
+    def node_count(self) -> int:
+        return len(self.adj)
+
+    def edge_count(self) -> int:
+        return sum(len(neighbors) for neighbors in self.adj.values())
+
+
+class TreeGraphBuilder:
+    """Builds a directed graph from a TreeNode hierarchy and optional references."""
+
+    @staticmethod
+    def _children_with_segments(parent_node: TreeNode) -> List[tuple[TreeNode, str]]:
+        result: List[tuple[TreeNode, str]] = []
+        key_count: dict[str, int] = {}
+        for child in parent_node.children:
+            key_count[child.key] = key_count.get(child.key, 0) + 1
+
+        seen: dict[str, int] = {}
+        for child in parent_node.children:
+            seen_index = seen.get(child.key, 0)
+            seen[child.key] = seen_index + 1
+            segment = child.key
+            if key_count[child.key] > 1 and not child.key.isdigit():
+                segment = f"{child.key}[{seen_index}]"
+            result.append((child, segment))
+        return result
+
+    @staticmethod
+    def _register_aliases(graph: GraphModel, path: str, root_key: str) -> None:
+        graph.add_alias(path, path)
+        if path == root_key:
+            graph.add_alias(".", path)
+            graph.add_alias("root", path)
+        if path.startswith("root."):
+            graph.add_alias(path[5:], path)
+        if path.startswith(f"{root_key}."):
+            graph.add_alias(path[len(root_key) + 1 :], path)
+
+    @staticmethod
+    def build_from_tree(root: TreeNode) -> GraphModel:
+        graph = GraphModel()
+        value_index: dict[str, List[str]] = {}
+
+        def walk(node: TreeNode, path: str, root_key: str) -> None:
+            meta_value = "" if node.value is None else str(node.value)
+            graph.add_node(path, key=node.key, type=node.type_name, value=meta_value)
+            TreeGraphBuilder._register_aliases(graph, path, root_key)
+
+            if node.value is not None:
+                value_index.setdefault(str(node.value), []).append(path)
+
+            for child, segment in TreeGraphBuilder._children_with_segments(node):
+                child_path = f"{path}.{segment}"
+                graph.add_edge(path, child_path)
+                walk(child, child_path, root_key)
+
+        walk(root, root.key, root.key)
+
+        # Optional cross-reference edges from values to known node paths.
+        reference_keys = {
+            "ref",
+            "reference",
+            "link",
+            "depends_on",
+            "depends",
+            "target",
+            "parent_ref",
+        }
+        for node_id, meta in graph.node_meta.items():
+            key_name = meta.get("key", "").strip().lower()
+            val = meta.get("value", "").strip()
+            if not val:
+                continue
+
+            if key_name in reference_keys:
+                target = graph.resolve(val)
+                if target is not None and target != node_id:
+                    graph.add_edge(node_id, target)
+                    continue
+
+            prefixed = re.fullmatch(r"(?:ref:|path:|node:)(.+)", val, flags=re.IGNORECASE)
+            if prefixed:
+                target_name = prefixed.group(1).strip()
+                target = graph.resolve(target_name)
+                if target is not None and target != node_id:
+                    graph.add_edge(node_id, target)
+
+        return graph
+
+
+class GraphOperations:
+    @staticmethod
+    def bfs_order(graph: GraphModel, start: str) -> Optional[List[str]]:
+        start_id = graph.resolve(start)
+        if start_id is None:
+            return None
+
+        visited: set[str] = {start_id}
+        order: List[str] = []
+        queue: deque[str] = deque([start_id])
+
+        while queue:
+            current = queue.popleft()
+            order.append(current)
+            for neighbor in sorted(graph.adj.get(current, set())):
+                if neighbor in visited:
+                    continue
+                visited.add(neighbor)
+                queue.append(neighbor)
+
+        return order
+
+    @staticmethod
+    def shortest_path(graph: GraphModel, start: str, target: str) -> Optional[List[str]]:
+        start_id = graph.resolve(start)
+        target_id = graph.resolve(target)
+        if start_id is None or target_id is None:
+            return None
+        if start_id == target_id:
+            return [start_id]
+
+        queue: deque[str] = deque([start_id])
+        visited: set[str] = {start_id}
+        parent: dict[str, str] = {}
+
+        while queue:
+            current = queue.popleft()
+            for neighbor in sorted(graph.adj.get(current, set())):
+                if neighbor in visited:
+                    continue
+                visited.add(neighbor)
+                parent[neighbor] = current
+                if neighbor == target_id:
+                    path = [target_id]
+                    while path[-1] != start_id:
+                        path.append(parent[path[-1]])
+                    path.reverse()
+                    return path
+                queue.append(neighbor)
+
+        return None
+
+    @staticmethod
+    def has_cycle(graph: GraphModel) -> bool:
+        state: dict[str, int] = {}
+
+        def dfs(node_id: str) -> bool:
+            state[node_id] = 1
+            for neighbor in graph.adj.get(node_id, set()):
+                mark = state.get(neighbor, 0)
+                if mark == 1:
+                    return True
+                if mark == 0 and dfs(neighbor):
+                    return True
+            state[node_id] = 2
+            return False
+
+        for node_id in graph.adj:
+            if state.get(node_id, 0) == 0 and dfs(node_id):
+                return True
+        return False
